@@ -208,11 +208,25 @@ function App() {
                     : data.quotations || [];
 
             const detailed = await Promise.all(
-                list.map(async (quotation) => {
+                list.map(async quotation => {
                     try {
-                        return await apiRequest(
+                        const data = await apiRequest(
                             `/quotations/${quotation.id}`
                         );
+
+                        const details =
+                            data.quotation || quotation;
+
+                        return {
+                            ...details,
+                            items: data.items || [],
+                            summary: data.summary || {},
+                            grand_total:
+                                data.summary?.grand_total ??
+                                details.grand_total ??
+                                details.total_amount ??
+                                0
+                        };
                     } catch {
                         return quotation;
                     }
@@ -1360,7 +1374,13 @@ function App() {
 
                                     <td>
                                         {money(
-                                            item.base_price
+                                            Number(item.base_price) > 0
+                                                ? item.base_price
+                                                : products.find(
+                                                      product =>
+                                                          Number(product.id) ===
+                                                          Number(item.product_id)
+                                                  )?.base_price
                                         )}
                                     </td>
 
