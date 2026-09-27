@@ -1727,18 +1727,6 @@ function LoginPage({ onLogin, loading }) {
 
                 </form>
 
-                <div className="demo-info">
-
-                    <p>
-                        Admin: admin@erp.com / Admin@123
-                    </p>
-
-                    <p>
-                        Sales: sales@erp.com / Sales@123
-                    </p>
-
-                </div>
-
             </div>
 
         </div>
