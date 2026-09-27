@@ -12,10 +12,11 @@ const {
 
 const router = express.Router();
 
+// Only Admin can dispatch
 router.post(
     "/",
     authenticateToken,
-    authorizeRoles("ADMIN", "SALES_USER"),
+    authorizeRoles("ADMIN"),
     createDispatch
 );
 

@@ -8,6 +8,10 @@ const {
 } = require("../controllers/salesOrderController");
 
 const {
+    createDispatch
+} = require("../controllers/dispatchController");
+
+const {
     authenticateToken,
     authorizeRoles
 } = require("../middleware/auth");
@@ -17,7 +21,7 @@ const router = express.Router();
 router.post(
     "/",
     authenticateToken,
-    authorizeRoles("ADMIN", "SALES_USER"),
+    authorizeRoles("SALES_USER", "ADMIN"),
     createSalesOrder
 );
 
@@ -35,11 +39,27 @@ router.get(
     getSalesOrderById
 );
 
+// Admin stock reservation (supports both POST per PDF spec and PUT)
+router.post(
+    "/:id/confirm",
+    authenticateToken,
+    authorizeRoles("ADMIN"),
+    confirmSalesOrder
+);
+
 router.put(
     "/:id/confirm",
     authenticateToken,
-    authorizeRoles("ADMIN", "SALES_USER"),
+    authorizeRoles("ADMIN"),
     confirmSalesOrder
+);
+
+// Admin dispatch (per PDF spec: POST /sales-orders/:id/dispatch)
+router.post(
+    "/:id/dispatch",
+    authenticateToken,
+    authorizeRoles("ADMIN"),
+    createDispatch
 );
 
 module.exports = router;

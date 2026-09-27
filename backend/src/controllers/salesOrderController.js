@@ -19,14 +19,12 @@ const createSalesOrder = async (req, res) => {
 
         const quotationResult = await client.query(
             `SELECT
-                q.id,
-                q.status,
-                q.enquiry_id,
-                e.customer_id,
-                q.*
+                q.*,
+                e.customer_id
              FROM quotations q
              JOIN enquiries e ON e.id = q.enquiry_id
-             WHERE q.id = $1`,
+             WHERE q.id = $1
+             FOR UPDATE`,
             [quotation_id]
         );
 
@@ -40,7 +38,6 @@ const createSalesOrder = async (req, res) => {
 
         const quotation = quotationResult.rows[0];
 
-    
         if (quotation.status !== "ACCEPTED") {
             await client.query("ROLLBACK");
 
@@ -49,13 +46,29 @@ const createSalesOrder = async (req, res) => {
             });
         }
 
-        
+        const duplicateResult = await client.query(
+            `SELECT id, order_number
+             FROM sales_orders
+             WHERE quotation_id = $1`,
+            [quotation_id]
+        );
+
+        if (duplicateResult.rows.length > 0) {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                message: "This quotation has already been converted to a Sales Order",
+                sales_order: duplicateResult.rows[0]
+            });
+        }
+
         const itemsResult = await client.query(
             `SELECT
-                quotation_id,
                 product_id,
                 quantity,
-                unit_price
+                unit_price,
+                discount_percent,
+                gst_percent
              FROM quotation_items
              WHERE quotation_id = $1
              ORDER BY id`,
@@ -70,13 +83,27 @@ const createSalesOrder = async (req, res) => {
             });
         }
 
-      
-        let totalAmount = 0;
+        let subtotal = 0;
+        let totalDiscount = 0;
+        let totalGST = 0;
 
         for (const item of itemsResult.rows) {
-            totalAmount +=
-                Number(item.quantity) * Number(item.unit_price);
+            const quantity = Number(item.quantity);
+            const unitPrice = Number(item.unit_price);
+            const discountPercent = Number(item.discount_percent || 0);
+            const gstPercent = Number(item.gst_percent || 0);
+
+            const lineSubtotal = quantity * unitPrice;
+            const discount = lineSubtotal * discountPercent / 100;
+            const taxable = lineSubtotal - discount;
+            const gst = taxable * gstPercent / 100;
+
+            subtotal += lineSubtotal;
+            totalDiscount += discount;
+            totalGST += gst;
         }
+
+        const totalAmount = subtotal - totalDiscount + totalGST;
 
         const orderResult = await client.query(
             `INSERT INTO sales_orders
@@ -93,7 +120,7 @@ const createSalesOrder = async (req, res) => {
                 order_number,
                 quotation_id,
                 quotation.customer_id,
-                totalAmount
+                Number(totalAmount.toFixed(2))
             ]
         );
 
@@ -102,7 +129,6 @@ const createSalesOrder = async (req, res) => {
         const savedItems = [];
 
         for (const item of itemsResult.rows) {
-
             const itemResult = await client.query(
                 `INSERT INTO sales_order_items
                 (
@@ -136,15 +162,19 @@ const createSalesOrder = async (req, res) => {
         });
 
     } catch (error) {
-
         await client.query("ROLLBACK");
+
+        if (error.code === "23505") {
+            return res.status(409).json({
+                message: "This quotation has already been converted to a Sales Order"
+            });
+        }
 
         console.error("Create sales order error:", error);
 
         res.status(500).json({
             message: "Server error"
         });
-
     } finally {
         client.release();
     }
@@ -153,7 +183,6 @@ const createSalesOrder = async (req, res) => {
 
 const getSalesOrders = async (req, res) => {
     try {
-
         const result = await pool.query(
             `SELECT
                 so.id,
@@ -174,7 +203,6 @@ const getSalesOrders = async (req, res) => {
         });
 
     } catch (error) {
-
         console.error("Get sales orders error:", error);
 
         res.status(500).json({
@@ -186,7 +214,6 @@ const getSalesOrders = async (req, res) => {
 
 const getSalesOrderById = async (req, res) => {
     try {
-
         const { id } = req.params;
 
         const orderResult = await pool.query(
@@ -231,7 +258,6 @@ const getSalesOrderById = async (req, res) => {
         });
 
     } catch (error) {
-
         console.error("Get sales order error:", error);
 
         res.status(500).json({
@@ -239,6 +265,7 @@ const getSalesOrderById = async (req, res) => {
         });
     }
 };
+
 
 const confirmSalesOrder = async (req, res) => {
     const client = await pool.connect();
@@ -248,7 +275,6 @@ const confirmSalesOrder = async (req, res) => {
 
         await client.query("BEGIN");
 
-        // 1. Get the sales order
         const orderResult = await client.query(
             `SELECT *
              FROM sales_orders
@@ -267,7 +293,6 @@ const confirmSalesOrder = async (req, res) => {
 
         const order = orderResult.rows[0];
 
-        // 2. Check current status
         if (order.status !== "PENDING") {
             await client.query("ROLLBACK");
 
@@ -276,7 +301,6 @@ const confirmSalesOrder = async (req, res) => {
             });
         }
 
-        // 3. Get order items
         const itemsResult = await client.query(
             `SELECT
                 soi.product_id,
@@ -298,9 +322,8 @@ const confirmSalesOrder = async (req, res) => {
 
         const reservedItems = [];
 
-        // 4. Check and reserve inventory
+        // Lock inventory rows before checking stock
         for (const item of itemsResult.rows) {
-
             const inventoryResult = await client.query(
                 `SELECT
                     product_id,
@@ -322,12 +345,18 @@ const confirmSalesOrder = async (req, res) => {
 
             const inventory = inventoryResult.rows[0];
 
-            const physical = Number(inventory.physical_quantity);
-            const reserved = Number(inventory.reserved_quantity);
-            const available = physical - reserved;
-            const requested = Number(item.quantity);
+            const physical =
+                Number(inventory.physical_quantity);
 
-            // 5. Insufficient stock check
+            const reserved =
+                Number(inventory.reserved_quantity);
+
+            const available =
+                physical - reserved;
+
+            const requested =
+                Number(item.quantity);
+
             if (requested > available) {
                 await client.query("ROLLBACK");
 
@@ -338,23 +367,26 @@ const confirmSalesOrder = async (req, res) => {
                 });
             }
 
-            // 6. Reserve stock
             await client.query(
                 `UPDATE inventory
-                 SET reserved_quantity = reserved_quantity + $1
+                 SET reserved_quantity =
+                     reserved_quantity + $1
                  WHERE product_id = $2`,
-                [requested, item.product_id]
+                [
+                    requested,
+                    item.product_id
+                ]
             );
 
             reservedItems.push({
                 product_id: item.product_id,
                 product_name: item.product_name,
                 reserved_quantity: requested,
-                remaining_available: available - requested
+                remaining_available:
+                    available - requested
             });
         }
 
-        // 7. Confirm Sales Order
         const updatedOrder = await client.query(
             `UPDATE sales_orders
              SET status = 'CONFIRMED'
@@ -366,13 +398,13 @@ const confirmSalesOrder = async (req, res) => {
         await client.query("COMMIT");
 
         res.json({
-            message: "Sales order confirmed and inventory reserved successfully",
+            message:
+                "Sales order confirmed and inventory reserved successfully",
             sales_order: updatedOrder.rows[0],
             inventory_reservation: reservedItems
         });
 
     } catch (error) {
-
         await client.query("ROLLBACK");
 
         console.error("Confirm sales order error:", error);
@@ -380,7 +412,6 @@ const confirmSalesOrder = async (req, res) => {
         res.status(500).json({
             message: "Server error"
         });
-
     } finally {
         client.release();
     }

@@ -4,22 +4,18 @@ const createDispatch = async (req, res) => {
     const client = await pool.connect();
 
     try {
-        const {
-            dispatch_number,
-            sales_order_id,
-            vehicle_number,
-            driver_name
-        } = req.body;
+        const sales_order_id = req.params.id || req.body.sales_order_id;
+        const dispatch_number = req.body.dispatch_number || `DSP-${Date.now()}`;
+        const { vehicle_number, driver_name } = req.body;
 
         if (
-            !dispatch_number ||
             !sales_order_id ||
             !vehicle_number ||
             !driver_name
         ) {
             return res.status(400).json({
                 message:
-                    "Dispatch number, sales order ID, vehicle number and driver name are required"
+                    "Sales order ID, vehicle number and driver name are required"
             });
         }
 

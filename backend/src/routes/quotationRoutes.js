@@ -3,7 +3,9 @@ const express = require("express");
 const {
     createQuotation,
     getQuotations,
-    getQuotationById
+    getQuotationById,
+    updateQuotationStatus,
+    convertQuotationToSalesOrder
 } = require("../controllers/quotationController");
 
 const {
@@ -16,7 +18,7 @@ const router = express.Router();
 router.post(
     "/",
     authenticateToken,
-    authorizeRoles("ADMIN", "SALES_USER"),
+    authorizeRoles("SALES_USER", "ADMIN"),
     createQuotation
 );
 
@@ -32,6 +34,20 @@ router.get(
     authenticateToken,
     authorizeRoles("ADMIN", "SALES_USER"),
     getQuotationById
+);
+
+router.patch(
+    "/:id/status",
+    authenticateToken,
+    authorizeRoles("SALES_USER", "ADMIN"),
+    updateQuotationStatus
+);
+
+router.post(
+    "/:id/convert",
+    authenticateToken,
+    authorizeRoles("SALES_USER", "ADMIN"),
+    convertQuotationToSalesOrder
 );
 
 module.exports = router;
